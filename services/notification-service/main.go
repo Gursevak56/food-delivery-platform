@@ -1,10 +1,18 @@
 package main
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
+
+func init() {
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, relying on environment")
+	}
+}
 
 func main() {
 	r := gin.Default()
@@ -14,33 +22,30 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-
-	// Example user endpoints
-	r.GET("/health", healthCheckHandler(database))
-	r.POST("/users", createUser)
-	r.GET("/users/:id", getUser)
-	r.PUT("/users/:id", updateUser)
-	r.DELETE("/users/:id", deleteUser)
+	r.POST("/notifications", createNotification)
+	r.GET("/notifications/:id", getNotification)
+	r.PUT("/notifications/:id", updateNotification)
+	r.DELETE("/notifications/:id", deleteNotification)
 
 	r.Run(":8080")
 }
 
-func createUser(c *gin.Context) {
+func createNotification(c *gin.Context) {
 	// TODO: business logic
-	c.JSON(http.StatusCreated, gin.H{"message": "user created"})
+	c.JSON(http.StatusCreated, gin.H{"message": "notification created"})
 }
 
-func getUser(c *gin.Context) {
+func getNotification(c *gin.Context) {
 	// TODO: business logic
 	c.JSON(http.StatusOK, gin.H{"id": c.Param("id"), "name": "example"})
 }
 
-func updateUser(c *gin.Context) {
+func updateNotification(c *gin.Context) {
 	// TODO: business logic
-	c.JSON(http.StatusOK, gin.H{"message": "user updated"})
+	c.JSON(http.StatusOK, gin.H{"message": "notification updated"})
 }
 
-func deleteUser(c *gin.Context) {
+func deleteNotification(c *gin.Context) {
 	// TODO: business logic
 	c.JSON(http.StatusOK, gin.H{"message": "user deleted"})
 }

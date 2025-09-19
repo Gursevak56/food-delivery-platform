@@ -2,18 +2,20 @@ package main
 
 import (
 	"database/sql"
-	_ "github.com/lib/pq" // or use mysql driver
 	"log"
+	"os"
+
+	_ "github.com/lib/pq"
 )
 
 func InitDB() *sql.DB {
-	connStr := "user=postgres password=yourpassword dbname=yourdb sslmode=disable"
+	connStr := os.Getenv("DATABASE_URL")
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("failed to open DB:", err)
 	}
 	if err = db.Ping(); err != nil {
-		log.Fatal(err)
+		log.Fatal("failed to ping DB:", err)
 	}
 	return db
 }

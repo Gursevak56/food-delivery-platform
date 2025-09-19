@@ -1,45 +1,39 @@
 package main
 
 import (
+	"log"
+	"time"
+
+	"github.com/Gursevak56/food-delivery-platform/services/restaurant-service/routes"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"net/http"
+	"github.com/joho/godotenv"
 )
 
+func init() {
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, relying on environment")
+	}
+}
+
 func main() {
+	database := InitDB()
+	defer database.Close()
+
 	r := gin.Default()
 
-	database := InitDB()
-	// Health check endpoint
-	r.GET("/health", func(c *gin.Context) {
-		healthCheckHandler(database)
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
+	// CORS
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:  []string{"*"},
+		AllowMethods:  []string{"GET", "POST", "PUT", "DELETE"},
+		AllowHeaders:  []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders: []string{"Content-Length"},
+		MaxAge:        12 * time.Hour,
+	}))
 
-	// Example user endpoints
-	r.POST("/users", createUser)
-	r.GET("/users/:id", getUser)
-	r.PUT("/users/:id", updateUser)
-	r.DELETE("/users/:id", deleteUser)
+	// r.GET("/health", healthCheckHandler(database))
 
-	r.Run(":8083")
-}
+	routes.Setup(r, database)
 
-func createUser(c *gin.Context) {
-	// TODO: business logic
-	c.JSON(http.StatusCreated, gin.H{"message": "user created"})
-}
-
-func getUser(c *gin.Context) {
-	// TODO: business logic
-	c.JSON(http.StatusOK, gin.H{"id": c.Param("id"), "name": "example"})
-}
-
-func updateUser(c *gin.Context) {
-	// TODO: business logic
-	c.JSON(http.StatusOK, gin.H{"message": "user updated"})
-}
-
-func deleteUser(c *gin.Context) {
-	// TODO: business logic
-	c.JSON(http.StatusOK, gin.H{"message": "user deleted"})
+	r.Run("0.0.0.0:8085")
 }

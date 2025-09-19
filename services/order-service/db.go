@@ -2,12 +2,14 @@ package main
 
 import (
 	"database/sql"
-	_ "github.com/lib/pq" // or use mysql driver
 	"log"
+	"os"
+
+	_ "github.com/lib/pq" // or use mysql driver
 )
 
 func InitDB() *sql.DB {
-	connStr := "user=postgres password=yourpassword dbname=yourdb sslmode=disable"
+	connStr := os.Getenv("DATABASE_URL")
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		log.Fatal(err)

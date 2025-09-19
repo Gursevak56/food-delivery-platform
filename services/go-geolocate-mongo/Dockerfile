@@ -1,0 +1,53 @@
+# ---- builder ----
+FROM golang:1.24-alpine AS builder
+
+# metadata
+LABEL maintainer="you@example.com"
+
+WORKDIR /app
+
+# disable CGO for static binary
+ENV CGO_ENABLED=0 \
+    GO111MODULE=on \
+    GOPROXY="https://proxy.golang.org,direct"
+
+# copy go files needed for dependency download first (leverages Docker cache)
+COPY go.mod go.sum ./
+RUN go mod download
+
+# copy the rest of the service source
+COPY . .
+
+# build the single main package that exists at the service root
+# output a single binary to /app/app
+RUN go build -ldflags="-s -w" -o /app/app .
+
+# ---- runtime image ----
+FROM alpine:latest
+
+# (optional) create non-root user for running the binary
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# install CA certs so TLS works
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /home/appuser
+
+# copy binary from builder stage
+COPY --from=builder /app/app /home/appuser/app
+COPY .env .
+
+# set permissions
+RUN chown appuser:appgroup /home/appuser/app && chmod +x /home/appuser/app
+
+USER appuser
+
+# environment defaults (override by ECS task or env file)
+ENV PORT=8086
+EXPOSE 8086
+
+# healthcheck (optional; many orchestrators use their own healthchecks)
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD ["/home/appuser/app","-health"] || exit 1
+
+# start
+ENTRYPOINT ["/home/appuser/app"]

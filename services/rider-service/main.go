@@ -1,17 +1,27 @@
 package main
 
 import (
-	"github.com/gin-gonic/gin"
+	"log"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 )
+
+func init() {
+	// Load .env silently (no error if file missing)
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, relying on environment")
+	}
+}
 
 func main() {
 	r := gin.Default()
 
-	database := InitDB()
+	InitDB()
 	// Health check endpoint
 	r.GET("/health", func(c *gin.Context) {
-		healthCheckHandler(database)
+		// Remove the undefined healthCheckHandler call
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
