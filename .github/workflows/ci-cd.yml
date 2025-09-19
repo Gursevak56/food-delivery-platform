@@ -6,6 +6,7 @@ on:
   pull_request:
     types: [closed]
 
+# workflow-level env (available to all jobs)
 env:
   AWS_REGION: ap-south-1
   AWS_ACCOUNT_ID: 456309724089
@@ -13,8 +14,14 @@ env:
 
 jobs:
   build-and-push:
+    # run on push or when a PR is merged (closed + merged)
     if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
+
+    # expose the optional env secret at job level so "if:" can use env context
+    env:
+      ENV_FILE_CONTENT: ${{ secrets.ENV_FILE_CONTENT }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,7 +41,6 @@ jobs:
           aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
 
       - name: Create .env files for services (optional)
-        # use env context in if: expression (allowed)
         if: env.ENV_FILE_CONTENT != ''
         run: |
           echo "Creating .env files from secret for all services..."
@@ -46,22 +52,51 @@ jobs:
             printf '%s\n' "$ENV_FILE_CONTENT" > "$dest"
             echo "Wrote $dest"
           done
-
+        shell: bash
 
       - name: Build, tag and push all services
         run: |
           set -euo pipefail
           COMMIT=${GITHUB_SHA::8}
-          IFS=' ' read -r -a services <<< "${{ env.SERVICES }}"
+          IFS=' ' read -r -a services <<< "${SERVICES}"
+
           for svc in "${services[@]}"; do
+            echo "========================"
             echo "Building ${svc}..."
-            docker build -t ${svc}:${COMMIT} ./services/${svc}
+            SERVICE_DIR="./services/${svc}"
+            DOCKERFILE_PATH="${SERVICE_DIR}/Dockerfile"
+
+            echo "Listing files in ${SERVICE_DIR}:"
+            if [ -d "${SERVICE_DIR}" ]; then
+              ls -la "${SERVICE_DIR}"
+            else
+              echo "ERROR: service directory ${SERVICE_DIR} does not exist!"
+              exit 1
+            fi
+
+            if [ -f "${DOCKERFILE_PATH}" ]; then
+              echo "Dockerfile found at ${DOCKERFILE_PATH} — building with repo root as context."
+              docker build -f "${DOCKERFILE_PATH}" -t ${svc}:${COMMIT} .
+            else
+              echo "No Dockerfile at ${DOCKERFILE_PATH}. Will try building using service directory as context."
+              if [ -f "${SERVICE_DIR}/dockerfile" ]; then
+                echo "Found 'dockerfile' (lowercase). Using it explicitly."
+                docker build -f "${SERVICE_DIR}/dockerfile" -t ${svc}:${COMMIT} "${SERVICE_DIR}"
+              else
+                # fallback: build using service dir as context (old behavior)
+                docker build -t ${svc}:${COMMIT} "${SERVICE_DIR}"
+              fi
+            fi
+
             REPO=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${svc}
             docker tag ${svc}:${COMMIT} ${REPO}:${COMMIT}
             docker tag ${svc}:${COMMIT} ${REPO}:latest
-            echo "Pushing ${svc}..."
+
+            echo "Pushing ${svc} to ECR..."
             docker push ${REPO}:${COMMIT}
             docker push ${REPO}:latest
+
+            echo "${svc} pushed: ${REPO}:${COMMIT}"
             echo "${svc}=${REPO}:${COMMIT}" >> images_built.txt
           done
         shell: bash
@@ -81,7 +116,7 @@ jobs:
         with:
           name: images-built
 
-      - name: Checkout repo
+      - name: Checkout repo (for deploy scripts)
         uses: actions/checkout@v4
 
       - name: Configure AWS credentials
@@ -91,10 +126,10 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install helpers
+      - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Deploy each service to ECS
+      - name: Deploy each service to ECS (register task & update-service)
         env:
           AWS_REGION: ${{ env.AWS_REGION }}
           AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
@@ -103,7 +138,11 @@ jobs:
           ECS_TASK_ROLE: ${{ secrets.ECS_TASK_ROLE }}
         run: |
           set -euo pipefail
+          # images_built.txt contains lines like: svc=repo:tag
           while IFS='=' read -r svc image; do
+            if [ -z "$svc" ]; then
+              continue
+            fi
             echo "Deploying $svc -> $image"
             ./deploy/update-ecs-service.sh "$svc" "$image"
           done < images_built.txt
