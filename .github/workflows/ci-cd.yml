@@ -11,6 +11,7 @@ env:
   AWS_REGION: ap-south-1
   AWS_ACCOUNT_ID: 456309724089
   SERVICES: go-geolocate-mongo notification-service order-service payment-service restaurant-service rider-service user-service
+  ECS_CLUSTER_NAME: my-microservices-cluster  # Update with your cluster name
 
 jobs:
   build-and-push:
@@ -39,7 +40,7 @@ jobs:
       - name: Login to ECR
         run: |
           aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-
+      
       - name: Create .env files for services (optional)
         if: env.ENV_FILE_CONTENT != ''
         run: |
@@ -59,13 +60,11 @@ jobs:
           set -euo pipefail
           COMMIT=${GITHUB_SHA::8}
           IFS=' ' read -r -a services <<< "${SERVICES}"
-
           for svc in "${services[@]}"; do
             echo "========================"
             echo "Building ${svc}..."
             SERVICE_DIR="./services/${svc}"
             DOCKERFILE_PATH="${SERVICE_DIR}/Dockerfile"
-
             echo "Listing files in ${SERVICE_DIR}:"
             if [ -d "${SERVICE_DIR}" ]; then
               ls -la "${SERVICE_DIR}"
@@ -73,7 +72,6 @@ jobs:
               echo "ERROR: service directory ${SERVICE_DIR} does not exist!"
               exit 1
             fi
-
             if [ -f "${DOCKERFILE_PATH}" ]; then
               echo "Dockerfile found at ${DOCKERFILE_PATH} — building with repo root as context."
               # IMPORTANT: pass the service dir so the Dockerfile can copy the right go.mod/go.sum
@@ -88,16 +86,191 @@ jobs:
                 docker build -t ${svc}:${COMMIT} "${SERVICE_DIR}"
               fi
             fi
-
             REPO=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${svc}
             docker tag ${svc}:${COMMIT} ${REPO}:${COMMIT}
             docker tag ${svc}:${COMMIT} ${REPO}:latest
-
             echo "Pushing ${svc} to ECR..."
             docker push ${REPO}:${COMMIT}
             docker push ${REPO}:latest
-
             echo "${svc} pushed: ${REPO}:${COMMIT}"
             echo "${svc}=${REPO}:${COMMIT}" >> images_built.txt
+          done
+        shell: bash
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: images-built
+          path: images_built.txt
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: images-built
+
+      - name: Create ECS Task Definitions and Services
+        run: |
+          set -euo pipefail
+          COMMIT=${GITHUB_SHA::8}
+          IFS=' ' read -r -a services <<< "${SERVICES}"
+          
+          # Create ECS cluster if it doesn't exist
+          echo "Ensuring ECS cluster exists: ${ECS_CLUSTER_NAME}"
+          aws ecs describe-clusters --clusters ${ECS_CLUSTER_NAME} || \
+          aws ecs create-cluster --cluster-name ${ECS_CLUSTER_NAME}
+          
+          for svc in "${services[@]}"; do
+            echo "========================"
+            echo "Deploying ${svc} to ECS..."
+            
+            IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${svc}:${COMMIT}"
+            TASK_DEFINITION_NAME="${svc}-task"
+            SERVICE_NAME="${svc}-service"
+            
+            # Create task definition JSON
+            cat > task-def-${svc}.json << EOF
+          {
+            "family": "${TASK_DEFINITION_NAME}",
+            "networkMode": "awsvpc",
+            "requiresCompatibilities": ["FARGATE"],
+            "cpu": "256",
+            "memory": "512",
+            "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+            "containerDefinitions": [
+              {
+                "name": "${svc}",
+                "image": "${IMAGE_URI}",
+                "essential": true,
+                "portMappings": [
+                  {
+                    "containerPort": 8080,
+                    "protocol": "tcp"
+                  }
+                ],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "/ecs/${svc}",
+                    "awslogs-region": "${AWS_REGION}",
+                    "awslogs-stream-prefix": "ecs"
+                  }
+                },
+                "environment": []
+              }
+            ]
+          }
+          EOF
+            
+            # Create CloudWatch log group
+            aws logs create-log-group --log-group-name "/ecs/${svc}" --region ${AWS_REGION} || true
+            
+            # Register task definition
+            echo "Registering task definition for ${svc}..."
+            TASK_DEF_ARN=$(aws ecs register-task-definition \
+              --cli-input-json file://task-def-${svc}.json \
+              --query 'taskDefinition.taskDefinitionArn' \
+              --output text)
+            
+            echo "Task definition registered: ${TASK_DEF_ARN}"
+            
+            # Check if service exists
+            if aws ecs describe-services --cluster ${ECS_CLUSTER_NAME} --services ${SERVICE_NAME} --query 'services[0].serviceName' --output text 2>/dev/null | grep -q "${SERVICE_NAME}"; then
+              echo "Service ${SERVICE_NAME} exists, updating..."
+              aws ecs update-service \
+                --cluster ${ECS_CLUSTER_NAME} \
+                --service ${SERVICE_NAME} \
+                --task-definition ${TASK_DEF_ARN}
+            else
+              echo "Creating new service ${SERVICE_NAME}..."
+              # You'll need to replace these subnet and security group IDs with your actual ones
+              aws ecs create-service \
+                --cluster ${ECS_CLUSTER_NAME} \
+                --service-name ${SERVICE_NAME} \
+                --task-definition ${TASK_DEF_ARN} \
+                --desired-count 1 \
+                --launch-type FARGATE \
+                --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.SUBNET_IDS }}],securityGroups=[${{ secrets.SECURITY_GROUP_IDS }}],assignPublicIp=ENABLED}"
+            fi
+            
+            echo "${svc} deployment initiated!"
+          done
+        shell: bash
+
+      - name: Wait for deployment completion
+        run: |
+          set -euo pipefail
+          IFS=' ' read -r -a services <<< "${SERVICES}"
+          
+          for svc in "${services[@]}"; do
+            SERVICE_NAME="${svc}-service"
+            echo "Waiting for ${SERVICE_NAME} to stabilize..."
+            
+            # Wait for service to reach steady state (timeout after 10 minutes)
+            aws ecs wait services-stable \
+              --cluster ${ECS_CLUSTER_NAME} \
+              --services ${SERVICE_NAME} || {
+              echo "WARNING: Service ${SERVICE_NAME} did not reach stable state within timeout"
+              # Get service events for debugging
+              aws ecs describe-services \
+                --cluster ${ECS_CLUSTER_NAME} \
+                --services ${SERVICE_NAME} \
+                --query 'services[0].events[0:5].[createdAt,message]' \
+                --output table
+            }
+          done
+        shell: bash
+
+      - name: Deployment Summary
+        run: |
+          echo "========================"
+          echo "DEPLOYMENT SUMMARY"
+          echo "========================"
+          echo "Cluster: ${ECS_CLUSTER_NAME}"
+          echo "Region: ${AWS_REGION}"
+          echo "Commit: ${GITHUB_SHA::8}"
+          echo ""
+          
+          IFS=' ' read -r -a services <<< "${SERVICES}"
+          for svc in "${services[@]}"; do
+            SERVICE_NAME="${svc}-service"
+            echo "Service: ${SERVICE_NAME}"
+            
+            # Get service status
+            STATUS=$(aws ecs describe-services \
+              --cluster ${ECS_CLUSTER_NAME} \
+              --services ${SERVICE_NAME} \
+              --query 'services[0].status' \
+              --output text 2>/dev/null || echo "NOT_FOUND")
+            
+            RUNNING_COUNT=$(aws ecs describe-services \
+              --cluster ${ECS_CLUSTER_NAME} \
+              --services ${SERVICE_NAME} \
+              --query 'services[0].runningCount' \
+              --output text 2>/dev/null || echo "0")
+            
+            DESIRED_COUNT=$(aws ecs describe-services \
+              --cluster ${ECS_CLUSTER_NAME} \
+              --services ${SERVICE_NAME} \
+              --query 'services[0].desiredCount' \
+              --output text 2>/dev/null || echo "0")
+            
+            echo "  Status: ${STATUS}"
+            echo "  Running Tasks: ${RUNNING_COUNT}/${DESIRED_COUNT}"
+            echo ""
           done
         shell: bash
