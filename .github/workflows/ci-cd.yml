@@ -11,7 +11,7 @@ env:
   AWS_REGION: ap-south-1
   AWS_ACCOUNT_ID: 456309724089
   SERVICES: go-geolocate-mongo notification-service order-service payment-service restaurant-service rider-service user-service
-  ECS_CLUSTER_NAME: my-microservices-cluster  # Update with your cluster name
+  ECS_CLUSTER_NAME: food-delivery-cluster
 
 jobs:
   build-and-push:
@@ -142,26 +142,44 @@ jobs:
             TASK_DEFINITION_NAME="${svc}-task"
             SERVICE_NAME="${svc}-service"
             
-            # Create task definition JSON
+            # Create task definition JSON with health check
             cat > task-def-${svc}.json << EOF
           {
             "family": "${TASK_DEFINITION_NAME}",
             "networkMode": "awsvpc",
             "requiresCompatibilities": ["FARGATE"],
-            "cpu": "256",
-            "memory": "512",
+            "cpu": "512",
+            "memory": "1024",
             "executionRoleArn": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
             "containerDefinitions": [
               {
                 "name": "${svc}",
                 "image": "${IMAGE_URI}",
+                "cpu": 0,
                 "essential": true,
+                "environment": [
+                  {
+                    "name": "PORT",
+                    "value": "8080"
+                  }
+                ],
                 "portMappings": [
                   {
                     "containerPort": 8080,
+                    "hostPort": 8080,
                     "protocol": "tcp"
                   }
                 ],
+                "healthCheck": {
+                  "command": [
+                    "CMD-SHELL",
+                    "curl -f http://localhost:8080/health || exit 1"
+                  ],
+                  "interval": 30,
+                  "retries": 3,
+                  "startPeriod": 10,
+                  "timeout": 5
+                },
                 "logConfiguration": {
                   "logDriver": "awslogs",
                   "options": {
@@ -170,7 +188,9 @@ jobs:
                     "awslogs-stream-prefix": "ecs"
                   }
                 },
-                "environment": []
+                "mountPoints": [],
+                "systemControls": [],
+                "volumesFrom": []
               }
             ]
           }
@@ -197,14 +217,41 @@ jobs:
                 --task-definition ${TASK_DEF_ARN}
             else
               echo "Creating new service ${SERVICE_NAME}..."
-              # You'll need to replace these subnet and security group IDs with your actual ones
+              
+              # Get target group ARN for the service
+              TARGET_GROUP_ARN=""
+              case ${svc} in
+                "go-geolocate-mongo")
+                  TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:ap-south-1:456309724089:targetgroup/go-geolocate-mongo-tg/76a381a48d990d76"
+                  ;;
+                "notification-service")
+                  TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:ap-south-1:456309724089:targetgroup/notification-service-tg/cd41837f0c196995"
+                  ;;
+                "order-service")
+                  TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:ap-south-1:456309724089:targetgroup/order-service-tg/9a06e8364f79de7b"
+                  ;;
+                "payment-service")
+                  TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:ap-south-1:456309724089:targetgroup/payment-service-tg/5bb4d042a4fce532"
+                  ;;
+                "restaurant-service")
+                  TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:ap-south-1:456309724089:targetgroup/restaurant-service-tg/c0eef53e68237d1a"
+                  ;;
+                "rider-service")
+                  TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:ap-south-1:456309724089:targetgroup/rider-service-tg/96cd580d2d0f2eb5"
+                  ;;
+                "user-service")
+                  TARGET_GROUP_ARN="arn:aws:elasticloadbalancing:ap-south-1:456309724089:targetgroup/user-service-tg/2801"
+                  ;;
+              esac
+              
               aws ecs create-service \
                 --cluster ${ECS_CLUSTER_NAME} \
                 --service-name ${SERVICE_NAME} \
                 --task-definition ${TASK_DEF_ARN} \
                 --desired-count 1 \
                 --launch-type FARGATE \
-                --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.SUBNET_IDS }}],securityGroups=[${{ secrets.SECURITY_GROUP_IDS }}],assignPublicIp=ENABLED}"
+                --network-configuration "awsvpcConfiguration={subnets=[subnet-007728462ef80ac33,subnet-0b43b446e3f82715d,subnet-0129d8e8384225791],securityGroups=[sg-044f12804b67fa79b,sg-011ba8e62a1f272c5,sg-0f7cb513956d53c4d],assignPublicIp=ENABLED}" \
+                --load-balancers "targetGroupArn=${TARGET_GROUP_ARN},containerName=${svc},containerPort=8080"
             fi
             
             echo "${svc} deployment initiated!"
