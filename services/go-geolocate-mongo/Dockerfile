@@ -35,7 +35,7 @@ WORKDIR /home/appuser
 
 # copy binary from builder stage
 COPY --from=builder /app/app /home/appuser/app
-COPY .env .
+# COPY .env .
 
 # set permissions
 RUN chown appuser:appgroup /home/appuser/app && chmod +x /home/appuser/app

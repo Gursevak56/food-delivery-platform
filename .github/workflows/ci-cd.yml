@@ -1,0 +1,108 @@
+name: CI/CD — Build Push Deploy to ECS
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    types: [closed]
+
+env:
+  AWS_REGION: ap-south-1
+  AWS_ACCOUNT_ID: 456309724089
+  SERVICES: go-geolocate-mongo notification-service order-service payment-service restaurant-service rider-service user-service
+
+jobs:
+  build-and-push:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (optional for multi-arch)
+        uses: docker/setup-qemu-action@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+
+      - name: Create .env files for services (optional)
+        if: ${{ secrets.ENV_FILE_CONTENT != '' }}
+        run: |
+          echo "Creating .env files from secret for all services..."
+          # This will place same .env into each service folder so build sees it
+          IFS=' ' read -r -a services <<< "${{ env.SERVICES }}"
+          for svc in "${services[@]}"; do
+            dest="./services/${svc}/.env"
+            mkdir -p "$(dirname "$dest")"
+            echo "${{ secrets.ENV_FILE_CONTENT }}" > "$dest"
+            echo "Wrote $dest"
+          done
+
+      - name: Build, tag and push all services
+        run: |
+          set -euo pipefail
+          COMMIT=${GITHUB_SHA::8}
+          IFS=' ' read -r -a services <<< "${{ env.SERVICES }}"
+          for svc in "${services[@]}"; do
+            echo "Building ${svc}..."
+            docker build -t ${svc}:${COMMIT} ./services/${svc}
+            REPO=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${svc}
+            docker tag ${svc}:${COMMIT} ${REPO}:${COMMIT}
+            docker tag ${svc}:${COMMIT} ${REPO}:latest
+            echo "Pushing ${svc}..."
+            docker push ${REPO}:${COMMIT}
+            docker push ${REPO}:latest
+            echo "${svc}=${REPO}:${COMMIT}" >> images_built.txt
+          done
+        shell: bash
+
+      - name: Upload images metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: images-built
+          path: images_built.txt
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download images metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: images-built
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install helpers
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Deploy each service to ECS
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
+          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+          ECS_EXEC_ROLE: ${{ secrets.ECS_EXEC_ROLE }}
+          ECS_TASK_ROLE: ${{ secrets.ECS_TASK_ROLE }}
+        run: |
+          set -euo pipefail
+          while IFS='=' read -r svc image; do
+            echo "Deploying $svc -> $image"
+            ./deploy/update-ecs-service.sh "$svc" "$image"
+          done < images_built.txt
+        shell: bash
