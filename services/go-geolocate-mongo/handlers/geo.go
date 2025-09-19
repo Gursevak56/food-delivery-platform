@@ -12,10 +12,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"go-geolocate-mongo/models"
-	"go-geolocate-mongo/pkg/mongo"
 )
 
 var googleAPIKey = os.Getenv("GOOGLE_API_KEY")
@@ -69,7 +69,9 @@ func DetectIP(c *gin.Context) {
 		Source:    "ip",
 		CreatedAt: time.Now(),
 	}
-	col := mongo.Collection(os.Getenv("MONGO_DB"), os.Getenv("MONGO_COLLECTION"))
+	client, _ := mongo.Connect(context.Background())
+	db := client.Database(os.Getenv("MONGO_DB"))
+	col := db.Collection(os.Getenv("MONGO_COLLECTION"))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _ = col.InsertOne(ctx, loc)
@@ -118,7 +120,9 @@ func ReverseGeocode(c *gin.Context) {
 		Source:    "client",
 		CreatedAt: time.Now(),
 	}
-	col := mongo.Collection(os.Getenv("MONGO_DB"), os.Getenv("MONGO_COLLECTION"))
+	client, _ := mongo.Connect(context.Background())
+	db := client.Database(os.Getenv("MONGO_DB"))
+	col := db.Collection(os.Getenv("MONGO_COLLECTION"))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _ = col.InsertOne(ctx, loc)
@@ -139,7 +143,9 @@ func SaveLocation(c *gin.Context) {
 	if payload.Source == "" {
 		payload.Source = "manual"
 	}
-	col := mongo.Collection(os.Getenv("MONGO_DB"), os.Getenv("MONGO_COLLECTION"))
+	client, _ := mongo.Connect(context.Background())
+	db := client.Database(os.Getenv("MONGO_DB"))
+	col := db.Collection(os.Getenv("MONGO_COLLECTION"))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err := col.InsertOne(ctx, payload)
@@ -153,7 +159,9 @@ func SaveLocation(c *gin.Context) {
 // GET /locations?userId=...
 func ListLocations(c *gin.Context) {
 	userId := c.Query("userId")
-	col := mongo.Collection(os.Getenv("MONGO_DB"), os.Getenv("MONGO_COLLECTION"))
+	client, _ := mongo.Connect(context.Background())
+	db := client.Database(os.Getenv("MONGO_DB"))
+	col := db.Collection(os.Getenv("MONGO_COLLECTION"))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	filter := bson.M{}
