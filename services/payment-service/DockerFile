@@ -1,53 +1,51 @@
-# ---- builder ----
+# services/<svc>/Dockerfile
+ARG SERVICE_DIR=services/user-service
 FROM golang:1.24-alpine AS builder
 
 # metadata
 LABEL maintainer="you@example.com"
 
-WORKDIR /app
+# set working dir for repo root copy
+WORKDIR /src
 
-# disable CGO for static binary
-ENV CGO_ENABLED=0 \
-    GO111MODULE=on \
-    GOPROXY="https://proxy.golang.org,direct"
+# copy go.mod and go.sum for the specific service (so mod download can run and cache)
+# when building with repo root as context, these exist at ${SERVICE_DIR}/go.mod
+ARG SERVICE_DIR
+COPY ${SERVICE_DIR}/go.mod ${SERVICE_DIR}/go.sum ./
 
-# copy go files needed for dependency download first (leverages Docker cache)
-COPY go.mod go.sum ./
-RUN go mod download
+# download dependencies (uses the go.mod from the service)
+RUN apk add --no-cache git && go env -w GOPROXY="https://proxy.golang.org,direct" && go mod download
 
-# copy the rest of the service source
+# copy the whole repo into the build context so local modules (siblings) are available
 COPY . .
 
-# build the single main package that exists at the service root
-# output a single binary to /app/app
-RUN go build -ldflags="-s -w" -o /app/app .
+# build from the service directory
+WORKDIR /src/${SERVICE_DIR}
+
+# disable CGO and build static binary
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/app .
 
 # ---- runtime image ----
 FROM alpine:latest
 
-# (optional) create non-root user for running the binary
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-
-# install CA certs so TLS works
 RUN apk add --no-cache ca-certificates
 
 WORKDIR /home/appuser
 
-# copy binary from builder stage
+# copy binary from builder
 COPY --from=builder /app/app /home/appuser/app
+
+# do NOT copy .env (we write it at build-time if needed, or provide at runtime)
 # COPY .env .
 
-# set permissions
 RUN chown appuser:appgroup /home/appuser/app && chmod +x /home/appuser/app
 
 USER appuser
 
-# environment defaults (override by ECS task or env file)
 ENV PORT=8083
 EXPOSE 8083
 
-# healthcheck (optional; many orchestrators use their own healthchecks)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 CMD ["/home/appuser/app","-health"] || exit 1
 
-# start
 ENTRYPOINT ["/home/appuser/app"]

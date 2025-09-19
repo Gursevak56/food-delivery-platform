@@ -76,7 +76,8 @@ jobs:
 
             if [ -f "${DOCKERFILE_PATH}" ]; then
               echo "Dockerfile found at ${DOCKERFILE_PATH} — building with repo root as context."
-              docker build -f "${DOCKERFILE_PATH}" -t ${svc}:${COMMIT} .
+              # IMPORTANT: pass the service dir so the Dockerfile can copy the right go.mod/go.sum
+              docker build -f "${DOCKERFILE_PATH}" --build-arg SERVICE_DIR="services/${svc}" -t ${svc}:${COMMIT} .
             else
               echo "No Dockerfile at ${DOCKERFILE_PATH}. Will try building using service directory as context."
               if [ -f "${SERVICE_DIR}/dockerfile" ]; then
@@ -99,51 +100,4 @@ jobs:
             echo "${svc} pushed: ${REPO}:${COMMIT}"
             echo "${svc}=${REPO}:${COMMIT}" >> images_built.txt
           done
-        shell: bash
-
-      - name: Upload images metadata
-        uses: actions/upload-artifact@v4
-        with:
-          name: images-built
-          path: images_built.txt
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download images metadata
-        uses: actions/download-artifact@v4
-        with:
-          name: images-built
-
-      - name: Checkout repo (for deploy scripts)
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Deploy each service to ECS (register task & update-service)
-        env:
-          AWS_REGION: ${{ env.AWS_REGION }}
-          AWS_ACCOUNT_ID: ${{ env.AWS_ACCOUNT_ID }}
-          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          ECS_EXEC_ROLE: ${{ secrets.ECS_EXEC_ROLE }}
-          ECS_TASK_ROLE: ${{ secrets.ECS_TASK_ROLE }}
-        run: |
-          set -euo pipefail
-          # images_built.txt contains lines like: svc=repo:tag
-          while IFS='=' read -r svc image; do
-            if [ -z "$svc" ]; then
-              continue
-            fi
-            echo "Deploying $svc -> $image"
-            ./deploy/update-ecs-service.sh "$svc" "$image"
-          done < images_built.txt
         shell: bash
