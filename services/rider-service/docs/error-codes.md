@@ -1,0 +1,37 @@
+# Error Codes
+
+- `UNAUTHORIZED`: missing or invalid access token
+- `INVALID_TOKEN`: token signature, issuer, or expiry invalid
+- `FORBIDDEN`: user lacks required role or state
+- `VALIDATION_FAILED`: DTO validation failure
+- `INVALID_REQUEST_BODY`: malformed JSON body
+- `RATE_LIMITED`: auth or OTP rate limit exceeded
+- `USER_NOT_FOUND`: user lookup failed
+- `RIDER_NOT_FOUND`: rider lookup failed
+- `WALLET_NOT_FOUND`: wallet lookup failed
+- `ASSIGNMENT_NOT_FOUND`: delivery assignment lookup failed
+- `ACTIVE_ORDER_NOT_FOUND`: rider has no active order
+- `ORDER_NOT_FOUND`: order lookup failed
+- `ORDER_REQUEST_EXPIRED`: rider offer expired before response
+- `ORDER_ACCEPT_FAILED`: accept flow failed
+- `ORDER_REJECT_FAILED`: reject flow failed
+- `INVALID_ORDER_TRANSITION`: delivery state machine violation
+- `PICKUP_OTP_REQUIRED`: pickup must be verified before pickup action
+- `DELIVERY_OTP_REQUIRED`: delivery must be verified before delivery action
+- `OTP_NOT_FOUND`: no active OTP record
+- `INVALID_OTP`: OTP value mismatch
+- `OTP_EXPIRED`: OTP expired
+- `OTP_LOCKED`: retry ceiling reached
+- `OTP_RESEND_LIMIT_REACHED`: resend ceiling reached
+- `SHIFT_REQUIRED`: shift must exist before action
+- `SHIFT_ALREADY_ACTIVE`: rider already has an active shift
+- `NO_ACTIVE_SHIFT`: no active shift exists
+- `NO_ACTIVE_BREAK`: no active break exists
+- `INSUFFICIENT_BALANCE`: wallet balance too low for payout
+- `PAYOUT_BELOW_MINIMUM`: payout request is below threshold
+- `PAYOUT_NOT_FOUND`: payout lookup failed
+- `TICKET_NOT_FOUND`: support ticket lookup failed
+- `RIDER_UPDATE_FAILED`: admin rider update failed
+- `TOKEN_ISSUE_FAILED`: JWT or refresh token creation failed
+- `PASSWORD_HASH_FAILED`: password hashing failed
+- `INTERNAL_ERROR`: unexpected server-side failure

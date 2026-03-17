@@ -1,9 +1,10 @@
+.env
 .git
 .gitignore
-Dockerfile
-node_modules
-*.log
-vendor
-bin
-.docker
 .vscode
+.idea
+bin
+build
+dist
+coverage
+*.log
